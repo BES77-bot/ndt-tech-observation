@@ -10,7 +10,7 @@ const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const ROOT = path.resolve(import.meta.dirname, '..');
 const TMP = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'ndtobs-'));
 const PORT = 8765, BASE = `http://localhost:${PORT}/`;
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
+const MIME = { '.mjs': 'text/javascript', '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
 const server = http.createServer((q, r) => {
   const f = path.join(ROOT, decodeURIComponent(new URL(q.url, BASE).pathname).replace(/\/$/, '/index.html'));
   if (!f.startsWith(ROOT) || !fs.existsSync(f)) { r.writeHead(404).end(); return; }
@@ -232,6 +232,232 @@ const T = {
     await p.reload({ waitUntil: 'domcontentloaded' });
     await p.waitForSelector('[data-act=new]', { timeout: 5000 });
     await p.setOfflineMode(false);
+    await b.close();
+  },
+
+  // Critical Evidence Markers: designation, warnings (not findings), evidence status, template carry-over.
+  async cem() {
+    const b = await launch('cem'), p = await open(b);
+    await profile(p); await newObs(p);
+    await p.click('#reqs .req:first-child [data-rq=critical]'); await sleep(300);
+    let o = (await stored(p))[0];
+    assert(o.req[0].critical === true && o.req[1].critical === false, 'critical flag saved on requirement');
+    await act(p, 'step', '[data-v=inspect]');
+    const [k1, k2] = await procKeys(p);
+    let c1 = await text(p, card(k1));
+    assert(c1.includes('CRITICAL EVIDENCE MARKER') && c1.includes('PROCEDURE-SPECIFIC REQUIREMENT') && c1.includes('EVIDENCE NOT RECORDED'), 'procedure CEM shown');
+    assert(!(await text(p, card(k2))).includes('CRITICAL EVIDENCE MARKER'), 'non-critical requirement has no marker');
+    const gen = await p.$$eval('.item.crit[data-key^="g:"]', a => a.map(e => e.dataset.key));
+    assert(gen.length === 7, 'ET default supporting markers on INSPECT: ' + gen.length);
+    const g1 = await text(p, card(gen[0]));
+    assert(g1.includes('SUPPORTING / GENERAL METHOD PROMPT') && g1.includes('does not create a technical requirement'), 'supporting prompt labelled');
+    assert(await p.$(`${card(gen[0])} [data-act=resp][data-v=NA]`), 'N/A available on supporting marker');
+    await answer(p, k1, 'Y');
+    await act(p, 'step', '[data-v=complete]');
+    await act(p, 'overall', '[data-v="Technician demonstrated satisfactory performance"]');
+    let t = await text(p, 'main');
+    assert(t.includes('Completion warnings') && t.includes('answered YES with no evidence recorded'), 'YES + CEM + no evidence → warning');
+    assert(!(await p.$eval('[data-act=complete]', e => e.disabled)), 'warning does not block completion');
+    await act(p, 'step', '[data-v=findings]');
+    assert((await text(p, 'main')).includes('Findings (0)'), 'warning does not create a finding');
+    await act(p, 'step', '[data-v=inspect]');
+    await answer(p, k1, 'N'); await fill(p, `${card(k1)} [data-rf="f.observed"]`, 'Skipped');
+    await act(p, 'step', '[data-v=findings]');
+    assert((await text(p, 'main')).includes('Findings (1)'), 'NO on CEM still creates the normal finding');
+    await act(p, 'step', '[data-v=inspect]');
+    await answer(p, k1, 'Y');
+    await p.click(`${card(k1)} [data-act=evType][data-v=DO]`); await sleep(300);
+    c1 = await text(p, card(k1));
+    assert(c1.includes('EVIDENCE RECORDED') && !c1.includes('NOT RECORDED'), 'Direct Observation → recorded');
+    assert(/Evidence ID\s*ET-\d{8}-[A-Z][A-Z2-9]-001/.test(c1), 'Evidence ID format: ' + c1.match(/ET-\S+/));
+    await p.click(`${card(gen[0])} [data-act=evType][data-v=DOC]`); await sleep(300);
+    assert((await text(p, card(gen[0]))).includes('EVIDENCE NOT RECORDED'), 'document type without reference → not recorded');
+    await fill(p, `${card(gen[0])} [data-rf="ev.ref"]`, 'REC-42'); await sleep(500);
+    assert((await text(p, card(gen[0]))).includes('EVIDENCE RECORDED'), 'reference entered → recorded (live)');
+    assert(/ET-\d{8}-..-002/.test(await text(p, card(gen[0]))), 'sequence increments');
+    await act(p, 'step', '[data-v=complete]');
+    assert(!(await text(p, 'main')).includes('answered YES with no evidence'), 'warning cleared once evidence recorded');
+    await act(p, 'step', '[data-v=setup]');
+    await fill(p, '#tplName', 'CEM Template'); await act(p, 'saveTpl');
+    const tpl = (await p.evaluate(() => new Promise(res => { const r = indexedDB.open('sos-ndt-observation'); r.onsuccess = () => { const q = r.result.transaction('tpl').objectStore('tpl').getAll(); q.onsuccess = () => res(q.result); }; })))[0];
+    assert(tpl.req[0].critical === true && tpl.req[1].critical === false, 'designation carries into template');
+    assert(!/ET-2|REC-42|types|media|"ev"/.test(JSON.stringify(tpl)), 'evidence does not carry into template');
+    await act(p, 'home'); await act(p, 'new'); await act(p, 'create', `[data-tpl="${tpl.id}"]`);
+    o = (await stored(p)).find(x => x.fromTemplate);
+    assert(o.req[0].critical === true && !Object.keys(o.resp).length, 'new observation: designation yes, evidence no');
+    await b.close();
+  },
+
+  // Governing basis, OJT, template revision clearing, report separation.
+  async basis() {
+    const b = await launch('basis'), p = await open(b);
+    await profile(p); await newObs(p);
+    await act(p, 'step', '[data-v=info]');
+    await act(p, 'addBasis');
+    await p.select('#basis .req:last-child [data-bs=cat]', 'Written Practice / Qualification Program');
+    await fill(p, '#basis .req:last-child [data-bs=doc]', 'Employer Written Practice / Qualification Program');
+    await fill(p, '#basis .req:last-child [data-bs=rev]', 'Rev 7');
+    await fill(p, '#basis .req:last-child [data-bs=ref]', 'Para 4.2');
+    await fill(p, '#basis .req:last-child [data-bs=notes]', 'Basis note');
+    assert(await p.$('datalist#basisDocs option[value="TM 1-1520-265-23"]'), 'document suggestions offered');
+    await act(p, 'step', '[data-v=complete]');
+    await act(p, 'addOjt');
+    await fill(p, '#ojt .req:last-child [data-oj=task]', 'Bolt hole scan');
+    await p.select('#ojt .req:last-child [data-oj=result]', 'Satisfactorily Demonstrated');
+    await fill(p, '#ojt .req:last-child [data-oj=hours]', '2.5');
+    await sleep(500);
+    let o = (await stored(p))[0];
+    assert(o.basis.length === 1 && o.basis[0].rev === 'Rev 7' && o.basis[0].cat.startsWith('Written'), 'basis saved');
+    assert(o.ojt[0].tech === 'Tech A' && o.ojt[0].component === 'Test Component' && o.ojt[0].hours === '2.5' && o.ojt[0].result === 'Satisfactorily Demonstrated', 'OJT saved and prefilled');
+    assert((await text(p, 'main')).includes('does not approve or credit OJT'), 'OJT credit disclaimer');
+    await act(p, 'step', '[data-v=inspect]');
+    await answer(p, (await procKeys(p))[1], 'N'); await fill(p, '[data-rf="f.observed"]', 'Obs');
+    await sleep(400);
+    await act(p, 'step', '[data-v=complete]'); await act(p, 'report');
+    const r = await text(p, '#report'), rh = await p.$eval('#report', e => e.innerHTML);
+    for (const x of ['Governing Basis', 'Rev 7', 'Para 4.2', 'Critical Task Evidence', 'Procedural Findings (1)', 'OJT / Task Evidence', 'Bolt hole scan', 'not credited'])
+      assert(r.includes(x), 'report contains ' + x);
+    assert(r.indexOf('Procedural Findings') < r.indexOf('Critical Task Evidence'), 'findings and task evidence are separate sections');
+    assert(!/<video|<img[^>]+blob:|data:video/.test(rh), 'no video in report');
+    await act(p, 'back');
+    await act(p, 'step', '[data-v=setup]'); await fill(p, '#tplName', 'Rev Template'); await act(p, 'saveTpl');
+    const tpl = (await p.evaluate(() => new Promise(res => { const r = indexedDB.open('sos-ndt-observation'); r.onsuccess = () => { const q = r.result.transaction('tpl').objectStore('tpl').getAll(); q.onsuccess = () => res(q.result); }; })))[0];
+    assert(!('rev' in tpl.proc) && tpl.basis[0].doc.startsWith('Employer') && tpl.basis[0].ref === 'Para 4.2' && !('rev' in tpl.basis[0]) && !JSON.stringify(tpl).includes('Rev 7'), 'template has identity/reference, no revision');
+    await act(p, 'home'); await act(p, 'new'); await act(p, 'create', `[data-tpl="${tpl.id}"]`);
+    const all = await stored(p), n = all.find(x => x.fromTemplate), orig = all.find(x => !x.fromTemplate);
+    assert(n.proc.rev === '' && n.proc.wp === 'WP-TEST' && n.basis[0].rev === '' && n.basis[0].doc.startsWith('Employer') && n.basis[0].cat.startsWith('Written'), 'new obs from template: revisions cleared, identity kept');
+    assert(orig.proc.rev === 'A' && orig.basis[0].rev === 'Rev 7', 'existing observation keeps historical revisions');
+    assert((await text(p, 'main')).includes('Revision / change levels were not carried from template'), 'observer prompted to verify revision');
+    // Old V1 template that still stored a revision: new observation must not take it.
+    await p.evaluate(() => new Promise(res => { const r = indexedDB.open('sos-ndt-observation'); r.onsuccess = () => { const t = r.result.transaction('tpl', 'readwrite'); t.objectStore('tpl').put({ id: 'v1tpl', name: 'V1 tpl', info: { method: 'ET' }, proc: { manual: 'TM-OLD', wp: 'WP-OLD', title: '', rev: 'OLD-REV' }, req: [] }); t.oncomplete = res; }; }));
+    await act(p, 'home'); await act(p, 'new'); await act(p, 'create', '[data-tpl="v1tpl"]');
+    const v = (await stored(p)).find(x => x.fromTemplate === 'V1 tpl');
+    assert(v.proc.manual === 'TM-OLD' && v.proc.rev === '', 'V1 template revision not carried');
+    await b.close();
+  },
+
+  // Phone video evidence: authorization gate, local pending file, provider abstraction, failure/retry, confirmation.
+  async video() {
+    const b = await launch('video'), p = await open(b);
+    const clip = path.join(TMP, 'clip.mp4'); fs.writeFileSync(clip, Buffer.alloc(200000, 7));
+    const media = () => p.evaluate(() => new Promise(res => { const r = indexedDB.open('sos-ndt-observation'); r.onsuccess = () => { const q = r.result.transaction('media').objectStore('media').getAll(); q.onsuccess = () => res(q.result.map(x => ({ fid: x.fid, size: x.blob.size }))); }; }));
+    await profile(p); await newObs(p);
+    await p.click('#reqs .req:first-child [data-rq=critical]'); await sleep(300);
+    await act(p, 'step', '[data-v=inspect]');
+    const [k1] = await procKeys(p);
+    await answer(p, k1, 'Y');
+    await p.click(`${card(k1)} [data-act=evType][data-v=VID]`); await sleep(300);
+    assert((await text(p, card(k1))).includes('Confirm photography/video is authorized'), 'authorization text shown');
+    assert(!(await p.$(`${card(k1)} input[data-media]`)), 'no capture before acknowledgement');
+    await p.click(`${card(k1)} [data-auth]`); await sleep(400);
+    const inp = await p.$(`${card(k1)} input[data-media=video]`);
+    assert(inp && await inp.evaluate(e => e.accept === 'video/*' && !e.hasAttribute('capture')), 'native picker (Take Video / Choose Existing)');
+    await inp.uploadFile(clip); await sleep(800);
+    let o = (await stored(p))[0], m = o.resp[k1].ev.media[0];
+    assert(o.recAuth.ack && o.recAuth.by === 'Test Observer', 'acknowledgement recorded');
+    assert(/^ET-\d{8}-[A-Z][A-Z2-9]-001-V1$/.test(m.fid) && m.status === 'READY' && m.size === 200000 && m.name === 'clip.mp4' && m.auth.ack, 'video metadata: ' + m.fid);
+    assert((await media())[0]?.size === 200000, 'file held locally, apart from the observation');
+    let c = await text(p, card(k1));
+    assert(c.includes('READY TO UPLOAD') && c.includes('LOCAL / PENDING') && c.includes('storage is not configured') && c.includes('EVIDENCE RECORDED'), 'pending state shown');
+    assert(!(await p.$(`${card(k1)} [data-act=upMedia]`)), 'no upload without a configured provider');
+    assert(await p.$(`${card(k1)} video`), 'review preview');
+    await p.$eval(card(k1), e => e.scrollIntoView());
+    await p.screenshot({ path: path.join(TMP, 'evidence-iphone.png') });
+    assert(!(await p.evaluate(() => document.documentElement.scrollWidth > innerWidth)), 'no horizontal scroll with evidence card');
+    // Mock client storage (test only).
+    await p.evaluate(async () => {
+      const s = await import('/js/storage.js');
+      window.__mock = { fail: true };
+      s.registerProvider({ id: 'mock', label: 'Mock', configured: true, async upload(blob, meta) {
+        if (window.__mock.fail) throw new Error('mock network down');
+        window.__mock.sent = { size: blob.size, meta };
+        return { ref: 'MOCK-123', confirmed: '2026-09-29T15:00:00.000Z' };
+      } });
+    });
+    await act(p, 'step', '[data-v=inspect]');
+    await p.click(`${card(k1)} [data-act=upMedia]`); await sleep(500);
+    o = (await stored(p))[0]; m = o.resp[k1].ev.media[0];
+    assert(m.status === 'FAILED' && m.error === 'mock network down' && m.attempts === 1, 'upload failure recorded');
+    assert(o.resp[k1].v === 'Y' && o.req.length === 2 && (await media()).length === 1, 'failure does not damage observation or file');
+    assert((await text(p, card(k1))).includes('UPLOAD FAILED'), 'failed status shown');
+    await p.evaluate(() => { window.__mock.fail = false; });
+    await p.click(`${card(k1)} [data-act=upMedia]`); await sleep(500);
+    o = (await stored(p))[0]; m = o.resp[k1].ev.media[0];
+    assert(m.status === 'UPLOADED' && m.storage.ref === 'MOCK-123' && m.storage.confirmed === '2026-09-29T15:00:00.000Z' && m.storage.provider === 'mock', 'confirmed upload recorded');
+    assert((await media()).length === 1 && m.local, 'local copy NOT deleted automatically');
+    const sent = await p.evaluate(() => window.__mock.sent);
+    assert(sent.size === 200000 && sent.meta.evidenceId === m.fid && sent.meta.observationId === o.id && sent.meta.technician === 'Tech A' && sent.meta.method === 'ET'
+      && sent.meta.aircraft === 'H-60 TAIL-001' && sent.meta.component === 'Test Component' && sent.meta.procedure.includes('WP-TEST') && sent.meta.procedureReference === 'Step 1 · R-1'
+      && sent.meta.requirement === 'Test requirement one' && sent.meta.observer === 'Test Observer' && sent.meta.fileName === 'clip.mp4' && sent.meta.recordingAuthorization.ack, 'upload metadata');
+    assert((await text(p, card(k1))).includes('CLIENT STORAGE / CONFIRMED'), 'confirmed state shown');
+    await p.click(`${card(k1)} [data-act=rmLocal]`); await sleep(100); await p.click(`${card(k1)} [data-act=rmLocal]`); await sleep(400);
+    o = (await stored(p))[0]; m = o.resp[k1].ev.media[0];
+    assert(!(await media()).length && !m.local && m.storage.ref === 'MOCK-123', 'local copy removed only on request, reference kept');
+    // Second clip: discard, then third clip interrupted mid-upload.
+    await (await p.$(`${card(k1)} input[data-media=video]`)).uploadFile(clip); await sleep(700);
+    await p.click(`${card(k1)} [data-act=discard]`); await sleep(100); await p.click(`${card(k1)} [data-act=discard]`); await sleep(400);
+    assert((await stored(p))[0].resp[k1].ev.media.length === 1 && !(await media()).length, 'unsent file discarded');
+    await (await p.$(`${card(k1)} input[data-media=video]`)).uploadFile(clip); await sleep(700);
+    o = (await stored(p))[0];
+    assert(o.resp[k1].ev.media[1].fid.endsWith('-V3'), 'file IDs never reused');
+    await p.evaluate((id, k) => new Promise(res => { const r = indexedDB.open('sos-ndt-observation'); r.onsuccess = () => { const s = r.result.transaction('obs', 'readwrite').objectStore('obs'); s.get(id).onsuccess = e => { const x = e.target.result; x.resp[k].ev.media[1].status = 'UPLOADING'; s.put(x).onsuccess = res; }; }; }), o.id, k1);
+    await p.reload({ waitUntil: 'networkidle0' });
+    await act(p, 'open', `[data-id="${o.id}"]`); await act(p, 'step', '[data-v=inspect]');
+    assert((await text(p, card(k1))).includes('interrupted'), 'interrupted upload → failed, retry offered');
+    // Completed record: upload still possible from COMPLETE, responses locked.
+    await act(p, 'step', '[data-v=complete]');
+    await act(p, 'overall', '[data-v="Technician demonstrated satisfactory performance"]');
+    assert((await text(p, 'main')).includes('LOCAL / PENDING'), 'pending warning on COMPLETE');
+    await act(p, 'complete');
+    await p.evaluate(async () => { const s = await import('/js/storage.js'); s.registerProvider({ id: 'mock', configured: true, async upload() { return { ref: 'MOCK-456' }; } }); });
+    await act(p, 'step', '[data-v=complete]');
+    await p.click('[data-act=upMedia]'); await sleep(500);
+    o = (await stored(p))[0];
+    assert(o.status === 'completed' && o.resp[k1].ev.media[1].status === 'UPLOADED' && o.resp[k1].ev.media[1].storage.confirmed, 'upload after completion');
+    // Export carries metadata, not the file.
+    await act(p, 'home');
+    assert((await text(p, 'main')).includes('LOCAL / PENDING') === false, 'no pending notice once all confirmed');
+    const dl = path.join(TMP, 'dlvid'); fs.mkdirSync(dl, { recursive: true });
+    await (await p.createCDPSession()).send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: dl });
+    await act(p, 'exportOne', `[data-id="${o.id}"]`); await sleep(800);
+    const f = fs.readdirSync(dl).find(x => x.endsWith('.json')), js = fs.readFileSync(path.join(dl, f), 'utf8');
+    assert(js.length < 60000 && js.includes('MOCK-456') && js.includes('-V3'), 'export has evidence metadata only');
+    await act(p, 'profile');
+    assert(o.resp[k1].ev.media[0].fid.includes('-' + (await text(p, '#devcode')) + '-'), 'device code visible in profile');
+    await act(p, 'home');
+    await act(p, 'del', `[data-id="${o.id}"]`); await act(p, 'del', `[data-id="${o.id}"]`);
+    assert(!(await media()).length && !(await stored(p)).length, 'deleting observation removes its local files');
+    await b.close();
+  },
+
+  // Existing V1 device data survives the upgrade unchanged.
+  async migrate() {
+    const b = await launch('migrate'), p = await b.newPage();
+    p.on('pageerror', e => errors.push(e.message));
+    await p.goto(BASE + 'manifest.webmanifest');
+    await p.evaluate(() => new Promise(res => {
+      const r = indexedDB.open('sos-ndt-observation', 1);
+      r.onupgradeneeded = () => { const d = r.result; d.createObjectStore('obs', { keyPath: 'id' }); d.createObjectStore('tpl', { keyPath: 'id' }); d.createObjectStore('kv', { keyPath: 'k' }); };
+      r.onsuccess = () => {
+        const t = r.result.transaction(['obs', 'kv'], 'readwrite');
+        t.objectStore('kv').put({ k: 'profile', name: 'V1 Observer', cert: 'L3' });
+        t.objectStore('obs').put({ id: 'v1rec', status: 'completed', created: '2026-09-28T10:00:00.000Z', updated: '2026-09-28T11:00:00.000Z', completed: '2026-09-28T11:00:00.000Z',
+          info: { method: 'PT', component: 'V1 Comp', techName: 'V1 Tech', observerName: 'V1 Observer', date: '2026-09-28' }, proc: { manual: 'TM-V1', wp: 'WP-V1', title: '', rev: 'B' },
+          req: [{ id: 'r1', step: '1', ref: 'X', text: 'V1 req' }], resp: { 'p:r1': { v: 'Y' } }, overall: { sel: 'Other', comments: '' },
+          sig: { obs: { name: 'V1 Observer', cert: '', img: '', date: '' }, tech: { name: '', img: '', date: '' } } });
+        t.oncomplete = () => { r.result.close(); res(); };
+      };
+    }));
+    await p.goto(BASE, { waitUntil: 'networkidle0' });
+    assert((await text(p, 'main')).includes('COMPLETED OBSERVATIONS (1)'), 'V1 record listed');
+    await act(p, 'open', '[data-id="v1rec"]'); await act(p, 'step', '[data-v=info]');
+    assert((await text(p, 'main')).includes('Governing Basis') && await p.$eval('[data-p="proc.rev"]', e => e.value === 'B'), 'V1 record opens, historical revision kept');
+    await act(p, 'step', '[data-v=inspect]');
+    assert((await text(p, 'main')).includes('SUPPORTING / GENERAL METHOD PROMPT'), 'PT default markers shown');
+    await act(p, 'step', '[data-v=complete]'); await act(p, 'report');
+    assert((await text(p, '#report')).includes('V1 req') && (await text(p, '#report')).includes('Critical Task Evidence'), 'V1 report renders');
+    const stores = await p.evaluate(() => new Promise(res => { const r = indexedDB.open('sos-ndt-observation'); r.onsuccess = () => res([...r.result.objectStoreNames]); }));
+    assert(stores.includes('media'), 'media store added');
     await b.close();
   },
 

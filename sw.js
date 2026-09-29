@@ -1,9 +1,9 @@
 // Offline cache. Bump VERSION whenever any app file changes so devices pick up the update.
-const VERSION = 'ndtobs-v1';
+const VERSION = 'ndtobs-v2';
 const FILES = [
   './', 'index.html', 'manifest.webmanifest',
   'css/app.css', 'css/print.css',
-  'js/app.js', 'js/db.js', 'js/model.js', 'js/checklists.js', 'js/report.js', 'js/signature.js', 'js/backup.js',
+  'js/app.js', 'js/db.js', 'js/model.js', 'js/checklists.js', 'js/report.js', 'js/signature.js', 'js/backup.js', 'js/evidence.js', 'js/storage.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
 ];
 

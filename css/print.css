@@ -8,3 +8,4 @@ body { background: #fff; padding: 0; }
 tr, .blk, .sigrow, .sumr { break-inside: avoid; }
 thead { display: table-header-group; }
 * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.rpt .chk td small { color: #555; }

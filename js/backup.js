@@ -1,9 +1,10 @@
 import { db } from './db.js';
 
 const FORMAT = 'sos-ndt-tech-observation';
+// Backups carry evidence METADATA only. Video/photo files are never written into export files.
 
 export const pack = (observations, templates) =>
-  ({ format: FORMAT, schema: 1, exported: new Date().toISOString(), observations, templates });
+  ({ format: FORMAT, schema: 2, exported: new Date().toISOString(), observations, templates });
 
 export function fileName(o) {
   const part = o ? [o.info.method, o.info.component, o.info.date].filter(Boolean).join('_') : 'all';

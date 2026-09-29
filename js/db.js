@@ -1,15 +1,19 @@
-// Minimal IndexedDB wrapper. Stores: obs (observations), tpl (templates), kv (profile, last-open).
+// Minimal IndexedDB wrapper. Stores: obs (observations), tpl (templates), kv (profile, last-open, device code,
+// evidence sequence), media (TEMPORARY pending evidence files, kept apart from observation records).
 let dbp;
 function open() {
   return dbp ||= new Promise((res, rej) => {
-    const r = indexedDB.open('sos-ndt-observation', 1);
-    r.onupgradeneeded = () => {
+    const r = indexedDB.open('sos-ndt-observation', 2);
+    r.onupgradeneeded = e => {
       const d = r.result;
-      d.createObjectStore('obs', { keyPath: 'id' });
-      d.createObjectStore('tpl', { keyPath: 'id' });
-      d.createObjectStore('kv', { keyPath: 'k' });
+      if (e.oldVersion < 1) {
+        d.createObjectStore('obs', { keyPath: 'id' });
+        d.createObjectStore('tpl', { keyPath: 'id' });
+        d.createObjectStore('kv', { keyPath: 'k' });
+      }
+      if (e.oldVersion < 2) d.createObjectStore('media', { keyPath: 'fid' });
     };
-    r.onsuccess = () => res(r.result);
+    r.onsuccess = () => { r.result.onversionchange = () => r.result.close(); res(r.result); };
     r.onerror = () => rej(r.error);
   });
 }

@@ -42,6 +42,7 @@ const RAW = [
     'Required process/field verification performed',
     'Required viewing conditions established',
     'Technician understands required inspection coverage',
+    'Magnetic particles applied as required',
   ] },
   { id: 'pt', step: 'setup', method: 'PT', title: 'PT/FPI Setup', items: [
     'Correct penetrant system selected',
@@ -104,6 +105,26 @@ const RAW = [
     'Required signatures/identification completed',
   ] },
 ];
+
+// Default Critical Evidence Markers per method, by item ID. These are SUPPORTING prompts only:
+// they flag where evidence may be useful and never create a technical requirement on their own.
+// N/A remains available; none is mandatory for every procedure.
+export const CRITICAL = {
+  ET: ['prep1', 'et2', 'et3', 'et6', 'et8', 'et9', 'et10', 'et11', 'et12', 'et14', 'perf5', 'perf3', 'perf13', 'perf12', 'comp1', 'comp2', 'comp8'],
+  MT: ['prep1', 'prep6', 'mt3', 'mt4', 'mt7', 'prep11', 'mt5', 'mt6', 'mt10', 'mt8', 'perf3', 'perf13', 'perf12', 'comp3', 'comp4', 'comp8'],
+  PT: ['prep1', 'pt2', 'pt3', 'pt4', 'pt5', 'pt6', 'pt7', 'pt8', 'pt9', 'pt10', 'pt11', 'perf3', 'perf13', 'perf12', 'comp5', 'comp8'],
+};
+
+export const EVT = { DO: 'Direct Observation', VID: 'Video', PHO: 'Photo', DOC: 'Document / Record', OTH: 'Other' };
+
+export const BASIS_CATS = ['Written Practice / Qualification Program', 'General NDI Standard / Manual', 'Aircraft / Component NDI Procedure', 'Maintenance Technical Data / Work Package', 'Other'];
+// Suggestions only. No revision is ever assumed current.
+export const BASIS_DOCS = ['Employer Written Practice / Qualification Program', 'NAS 410', 'TM 1-1500-335-23', 'TM 1-1520-265-23', 'Applicable H-60 maintenance technical data / work package'];
+
+export const OJT_RESULTS = ['Satisfactorily Demonstrated', 'Additional Observation Required', 'Not Demonstrated', 'Not Evaluated'];
+export const OJT_NOTE = 'Hours are recorded only. This app does not approve or credit OJT/experience hours; final credit is governed by the employer\'s Written Practice / qualification program.';
+
+export const AUTH_TEXT = 'Confirm photography/video is authorized for this location and inspection. Do not record restricted, controlled, proprietary, CUI, export-controlled, or otherwise unauthorized information.';
 
 export const SECTIONS = RAW.map(s => ({
   ...s,
